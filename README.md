@@ -80,7 +80,7 @@ Generates and saves a spectrogram comparison to:
 - `ContentEncoder`: Wav2Vec2 Base (768-dim), pretrained, frozen during fine-tuning
 - `SpeakerEncoder`: 3-layer FFNN, trained using online triplet loss
 - `StyleEncoder`: CNN + pooling + MLP projecting to 128-dim prosody vector
-- `StyleModulator`: MLP fusion of content, speaker, and style vectors
+- `StyleModulator`: Deep MLP with LayerNorm, GELU, and Dropout, auto-handling sequence alignment
 - `Vocoder`: HiFi-GAN V1, optionally fine-tuned on custom outputs
 
 ---

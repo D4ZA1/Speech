@@ -92,11 +92,6 @@ Generates and saves a spectrogram comparison to:
 
 ---
 
-## 📄 License
-MIT License
-
----
-
 ## 👥 Authors
 - Pasupuleti Jaswanth
 - Shamil Saidu

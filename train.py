@@ -1,14 +1,17 @@
+
 # Final Training Notebook: speech_style_transfer_training_final.ipynb
 
-import torch
-import torchaudio
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
 import os
+
+import kagglehub
 import librosa
 import numpy as np
-import kagglehub
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchaudio
+from torch.utils.data import DataLoader, Dataset
+
 from models.content_encoder import ContentEncoder
 from models.speaker_encoder import SpeakerEncoder
 from models.style_modulator import StyleModulator
@@ -16,10 +19,13 @@ from models.vocoder import Vocoder
 
 # --- CONFIG ---
 SAMPLE_RATE = 16000
+
 AUDIO_LEN = 3 * SAMPLE_RATE  # 3 seconds fixed length
 
 # --- DOWNLOAD DATASET (RAVDESS) ---
+print("Downloading RAVDESS dataset...")
 DATA_PATH = kagglehub.dataset_download("uwrfkaggler/ravdess-emotional-speech-audio")
+print("Dataset downloaded at:", DATA_PATH)
 
 # --- DATASET CLASS ---
 class EmotionSpeechDataset(Dataset):
@@ -29,6 +35,7 @@ class EmotionSpeechDataset(Dataset):
             for f in files:
                 if f.endswith('.wav'):
                     self.file_list.append(os.path.join(root, f))
+        print(f"Found {len(self.file_list)} .wav files in dataset.")
 
     def __len__(self):
         return len(self.file_list)
@@ -42,10 +49,12 @@ class EmotionSpeechDataset(Dataset):
         return torch.tensor(y).unsqueeze(0), torch.tensor(mel_db)
 
 # --- MODEL INITIALIZATION ---
+print("Initializing models...")
 content_encoder = ContentEncoder()
 speaker_encoder = SpeakerEncoder()
 style_modulator = StyleModulator(input_dim=768, style_dim=256)
 vocoder = Vocoder()
+print("Models initialized.")
 
 # --- LOSS & OPTIMIZER ---
 recon_loss_fn = nn.L1Loss()
@@ -53,12 +62,16 @@ optimizer = optim.Adam(list(content_encoder.parameters()) +
                        list(speaker_encoder.parameters()) +
                        list(style_modulator.parameters()) +
                        list(vocoder.parameters()), lr=1e-4)
+print("Optimizer and loss function set.")
 
 # --- TRAINING LOOP ---
+print("Preparing DataLoader...")
 dataset = EmotionSpeechDataset(DATA_PATH)
 dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+print("Starting training loop...")
 
 for epoch in range(10):
+    running_loss = 0.0
     for i, (wave, mel) in enumerate(dataloader):
         content_feat = content_encoder(wave)
         speaker_embed = speaker_encoder(mel)
@@ -72,13 +85,21 @@ for epoch in range(10):
         loss.backward()
         optimizer.step()
 
+        running_loss += loss.item()
+
         if i % 10 == 0:
-            print(f"Epoch {epoch}, Step {i}, Loss: {loss.item():.4f}")
+            print(f"Epoch {epoch}, Step {i}, Batch Loss: {loss.item():.4f}")
+
+    avg_loss = running_loss / len(dataloader)
+    print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}\n")
 
 # --- SAVE CHECKPOINT ---
+print("Saving model checkpoint...")
 torch.save({
     'content_encoder': content_encoder.state_dict(),
     'speaker_encoder': speaker_encoder.state_dict(),
     'style_modulator': style_modulator.state_dict(),
     'vocoder': vocoder.state_dict()
 }, 'speech_style_model.pth')
+print("Model saved as speech_style_model.pth")
+

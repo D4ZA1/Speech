@@ -1,4 +1,3 @@
-
 # Final Training Notebook: speech_style_transfer_training_final.ipynb
 
 import os
@@ -43,10 +42,12 @@ class EmotionSpeechDataset(Dataset):
     def __getitem__(self, idx):
         file = self.file_list[idx]
         y, sr = librosa.load(file, sr=SAMPLE_RATE)
-        y = librosa.util.fix_length(y, AUDIO_LEN)
+        y = librosa.util.fix_length(y, size=AUDIO_LEN)
         mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=1024, hop_length=256, n_mels=80)
         mel_db = librosa.power_to_db(mel, ref=np.max)
-        return torch.tensor(y).unsqueeze(0), torch.tensor(mel_db)
+        mel_tensor = torch.tensor(mel_db).float()  # [80, T]
+        wav_tensor = torch.tensor(y).float()  # [T]
+        return wav_tensor.unsqueeze(0), mel_tensor  # [1, T], [80, T]
 
 # --- MODEL INITIALIZATION ---
 print("Initializing models...")
@@ -73,12 +74,31 @@ print("Starting training loop...")
 for epoch in range(10):
     running_loss = 0.0
     for i, (wave, mel) in enumerate(dataloader):
+        wave = wave.squeeze(1)  # shape: [B, T]
         content_feat = content_encoder(wave)
+
+        if mel.dim() == 3 and mel.shape[1] != 80:
+            mel = mel.permute(0, 2, 1)  # [B, T, 80] -> [B, 80, T]
+
+        # Pad or trim mel to length 300
+        current_len = mel.size(-1)
+        if current_len < 300:
+            padding = torch.zeros(mel.size(0), mel.size(1), 300 - current_len)
+            mel = torch.cat([mel, padding], dim=-1)
+        elif current_len > 300:
+            mel = mel[:, :, :300]  # truncate
+
+        # Normalize mel (optional but helps stability)
+        mel = (mel - mel.mean(dim=-1, keepdim=True)) / (mel.std(dim=-1, keepdim=True) + 1e-5)
+
         speaker_embed = speaker_encoder(mel)
         style_embed = speaker_encoder(mel)  # demo only: same as speaker
 
         modulated = style_modulator(content_feat, style_embed)
         reconstructed = vocoder(modulated)
+
+        if reconstructed.dim() == 3:
+            reconstructed = reconstructed.squeeze(1)
 
         loss = recon_loss_fn(reconstructed, wave)
         optimizer.zero_grad()
@@ -102,4 +122,3 @@ torch.save({
     'vocoder': vocoder.state_dict()
 }, 'speech_style_model.pth')
 print("Model saved as speech_style_model.pth")
-

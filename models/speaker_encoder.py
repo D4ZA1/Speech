@@ -17,7 +17,7 @@ class SpeakerEncoder(nn.Module):
 
             nn.Conv1d(256, 256, kernel_size=5, stride=1, padding=2),
             nn.ReLU(),
-            nn.LayerNorm([256, 300]),
+            nn.LayerNorm(256),
             nn.Dropout(0.2),
         )
 

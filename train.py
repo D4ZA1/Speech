@@ -1,3 +1,4 @@
+
 # Final Training Notebook: speech_style_transfer_training_final.ipynb
 
 import os
@@ -45,9 +46,9 @@ class EmotionSpeechDataset(Dataset):
         y = librosa.util.fix_length(y, size=AUDIO_LEN)
         mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=1024, hop_length=256, n_mels=80)
         mel_db = librosa.power_to_db(mel, ref=np.max)
-        mel_tensor = torch.tensor(mel_db).float()  # [80, T]
-        wav_tensor = torch.tensor(y).float()  # [T]
-        return wav_tensor.unsqueeze(0), mel_tensor  # [1, T], [80, T]
+        mel_tensor = torch.tensor(mel_db).float().T  # [T, 80] to match [B, T, 80] expectation
+        wav_tensor = torch.tensor(y).float()
+        return wav_tensor.unsqueeze(0), mel_tensor  # [1, T], [T, 80]
 
 # --- MODEL INITIALIZATION ---
 print("Initializing models...")
@@ -77,22 +78,27 @@ for epoch in range(10):
         wave = wave.squeeze(1)  # shape: [B, T]
         content_feat = content_encoder(wave)
 
-        if mel.dim() == 3 and mel.shape[1] != 80:
-            mel = mel.permute(0, 2, 1)  # [B, T, 80] -> [B, 80, T]
+        if mel.dim() == 2:
+            mel = mel.unsqueeze(0)  # [T, 80] -> [1, T, 80]
 
-        # Pad or trim mel to length 300
-        current_len = mel.size(-1)
+        # Final safety check: ensure mel is [B, T, 80]
+        assert mel.shape[2] == 80, f"mel shape invalid before speaker encoder: {mel.shape}"
+
+        # Pad or trim mel to length 300 frames
+        current_len = mel.size(1)
         if current_len < 300:
-            padding = torch.zeros(mel.size(0), mel.size(1), 300 - current_len)
-            mel = torch.cat([mel, padding], dim=-1)
+            padding = torch.zeros(mel.size(0), 300 - current_len, 80)
+            mel = torch.cat([mel, padding], dim=1)
         elif current_len > 300:
-            mel = mel[:, :, :300]  # truncate
+            mel = mel[:, :300, :]  # truncate
 
-        # Normalize mel (optional but helps stability)
-        mel = (mel - mel.mean(dim=-1, keepdim=True)) / (mel.std(dim=-1, keepdim=True) + 1e-5)
+        # Normalize mel per sample
+        mel_mean = mel.mean(dim=(1, 2), keepdim=True)
+        mel_std = mel.std(dim=(1, 2), keepdim=True) + 1e-5
+        mel = (mel - mel_mean) / mel_std
 
         speaker_embed = speaker_encoder(mel)
-        style_embed = speaker_encoder(mel)  # demo only: same as speaker
+        style_embed = speaker_encoder(mel)
 
         modulated = style_modulator(content_feat, style_embed)
         reconstructed = vocoder(modulated)
@@ -122,3 +128,4 @@ torch.save({
     'vocoder': vocoder.state_dict()
 }, 'speech_style_model.pth')
 print("Model saved as speech_style_model.pth")
+

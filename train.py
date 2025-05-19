@@ -1,131 +1,177 @@
 
-# Final Training Notebook: speech_style_transfer_training_final.ipynb
-
 import os
 
 import kagglehub
-import librosa
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torchaudio
-from torch.utils.data import DataLoader, Dataset
 
-from models.content_encoder import ContentEncoder
-from models.speaker_encoder import SpeakerEncoder
-from models.style_modulator import StyleModulator
-from models.vocoder import Vocoder
+from config import Config
 
-# --- CONFIG ---
-SAMPLE_RATE = 16000
+# Import models and modules
+try:
 
-AUDIO_LEN = 3 * SAMPLE_RATE  # 3 seconds fixed length
+    from my_models.content_encoder import ContentEncoder
+    print("ContentEncoder imported successfully from my_models.content_encoder")
+except ImportError as e:
+    print(f"Error importing ContentEncoder: {e}")
+    ContentEncoder = None  # Set to None to prevent further errors
+try:
+    from my_models.speaker_encoder import SpeakerEncoder
+    print("SpeakerEncoder imported successfully from my_models.speaker_encoder")
+except ImportError as e:
+    print(f"Error importing SpeakerEncoder: {e}")
+    SpeakerEncoder = None
+try:
+    from my_models.style_encoder import StyleEncoder
+    print("StyleEncoder imported successfully from my_models.style_encoder")
+except ImportError as e:
+    print(f"Error importing StyleEncoder: {e}")
+    StyleEncoder = None
+try:
+    from my_modules.style_modulator import StyleModulator
+    print("StyleModulator imported successfully from my_modules.style_modulator")
+except ImportError as e:
+    print(f"Error importing StyleModulator: {e}")
+    StyleModulator = None
+try:
+    from my_models.vocoder import HiFiGANVocoder
+    print("HiFiGANVocoder imported successfully from my_models.vocoder")
+except ImportError as e:
+    print(f"Error importing HiFiGANVocoder: {e}")
+    HiFiGANVocoder = None
 
-# --- DOWNLOAD DATASET (RAVDESS) ---
-print("Downloading RAVDESS dataset...")
-DATA_PATH = kagglehub.dataset_download("uwrfkaggler/ravdess-emotional-speech-audio")
-print("Dataset downloaded at:", DATA_PATH)
+try:
+    from my_modules.transfer_module import train_transfer_step
+    print("train_transfer_step imported successfully from my_modules.transfer_module")
+except ImportError as e:
+    print(f"Error importing train_transfer_step: {e}")
+    train_transfer_step = None
 
-# --- DATASET CLASS ---
-class EmotionSpeechDataset(Dataset):
-    def __init__(self, root_dir):
-        self.file_list = []
-        for root, _, files in os.walk(root_dir):
-            for f in files:
-                if f.endswith('.wav'):
-                    self.file_list.append(os.path.join(root, f))
-        print(f"Found {len(self.file_list)} .wav files in dataset.")
+# Import utils
+try:
+    from my_utils.audio import load_audio
+    print("load_audio imported successfully from my_utils.audio")
+except ImportError as e:
+    print(f"Error importing load_audio: {e}")
+    load_audio = None
+try:
+    from my_utils.data import RAVDESSDataset, create_dataloader
+    print("RAVDESSDataset and create_dataloader imported successfully from my_utils.data")
+except ImportError as e:
+    print(f"Error importing RAVDESSDataset and create_dataloader: {e}")
+    RAVDESSDataset = None
+    create_dataloader = None
 
-    def __len__(self):
-        return len(self.file_list)
 
-    def __getitem__(self, idx):
-        file = self.file_list[idx]
-        y, sr = librosa.load(file, sr=SAMPLE_RATE)
-        y = librosa.util.fix_length(y, size=AUDIO_LEN)
-        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=1024, hop_length=256, n_mels=80)
-        mel_db = librosa.power_to_db(mel, ref=np.max)
-        mel_tensor = torch.tensor(mel_db).float().T  # [T, 80] to match [B, T, 80] expectation
-        wav_tensor = torch.tensor(y).float()
-        return wav_tensor.unsqueeze(0), mel_tensor  # [1, T], [T, 80]
+def main():
+    print("Downloading RAVDESS dataset...")
+    DATA_PATH = kagglehub.dataset_download("uwrfkaggler/ravdess-emotional-speech-audio")
+    print("Dataset downloaded at:", DATA_PATH)
+    downloaded_path = os.path.join("data", "ravdess-emotional-speech-audio")
+    if os.path.exists(downloaded_path):
+        os.rename(downloaded_path, DATA_PATH)
+    else:
+        print(
+            f"Warning: Downloaded directory not found at '{downloaded_path}'. Assuming download was successful."
+        )
 
-# --- MODEL INITIALIZATION ---
-print("Initializing models...")
-content_encoder = ContentEncoder()
-speaker_encoder = SpeakerEncoder()
-style_modulator = StyleModulator(input_dim=768, style_dim=256)
-vocoder = Vocoder()
-print("Models initialized.")
+    if RAVDESSDataset:
+        dataset = RAVDESSDataset(
+            DATA_PATH, Config.AUDIO_LEN * Config.SAMPLE_RATE, Config.SAMPLE_RATE
+        )
+    else:
+        print("RAVDESSDataset is not initialized, cannot proceed.")
+        return
 
-# --- LOSS & OPTIMIZER ---
-recon_loss_fn = nn.L1Loss()
-optimizer = optim.Adam(list(content_encoder.parameters()) +
-                       list(speaker_encoder.parameters()) +
-                       list(style_modulator.parameters()) +
-                       list(vocoder.parameters()), lr=1e-4)
-print("Optimizer and loss function set.")
+    if create_dataloader:
+        dataloader = create_dataloader(dataset, Config.BATCH_SIZE, shuffle=True)
+    else:
+        print("create_dataloader is not initialized, cannot proceed.")
+        return
 
-# --- TRAINING LOOP ---
-print("Preparing DataLoader...")
-dataset = EmotionSpeechDataset(DATA_PATH)
-dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-print("Starting training loop...")
+    # 2. Models
+    if ContentEncoder:
+        content_encoder = ContentEncoder(Config.CONTENT_ENCODER_OUTPUT_DIM).to(
+            Config.DEVICE
+        )
+    else:
+        print("Content Encoder is not initialized")
+        return
+    if SpeakerEncoder:
+        speaker_encoder = SpeakerEncoder(80, Config.SPEAKER_ENCODER_EMBED_DIM).to(
+            Config.DEVICE
+        )
+    else:
+        print("Speaker Encoder is not initialized")
+        return
+    if StyleEncoder:
+        style_encoder = StyleEncoder(80, Config.STYLE_ENCODER_EMBED_DIM).to(Config.DEVICE)
+    else:
+        print("Style Encoder is not initialized")
+        return
 
-for epoch in range(10):
-    running_loss = 0.0
-    for i, (wave, mel) in enumerate(dataloader):
-        wave = wave.squeeze(1)  # shape: [B, T]
-        content_feat = content_encoder(wave)
+    if StyleModulator:
+        style_modulator = StyleModulator(
+            Config.CONTENT_ENCODER_OUTPUT_DIM,
+            Config.SPEAKER_ENCODER_EMBED_DIM,
+            Config.STYLE_ENCODER_EMBED_DIM,
+            Config.STYLE_MODULATOR_HIDDEN_DIM,
+        ).to(Config.DEVICE)
+    else:
+        print("Style Modulator is not initialized")
+        return
+    if HiFiGANVocoder:
+        vocoder = HiFiGANVocoder().to(Config.DEVICE)
+    else:
+        print("Vocoder is not initialized")
+        return
 
-        if mel.dim() == 2:
-            mel = mel.unsqueeze(0)  # [T, 80] -> [1, T, 80]
+    # 3. Optimizer
+    optimizer = optim.Adam(
+        list(content_encoder.parameters())
+        + list(speaker_encoder.parameters())
+        + list(style_encoder.parameters())
+        + list(style_modulator.parameters())
+        + list(vocoder.parameters()),
+        lr=Config.LEARNING_RATE,
+    )
 
-        # Final safety check: ensure mel is [B, T, 80]
-        assert mel.shape[2] == 80, f"mel shape invalid before speaker encoder: {mel.shape}"
+    # 4. Training Loop
+    for epoch in range(Config.NUM_EPOCHS):
+        total_loss = 0
+        for i, (wave, mel) in enumerate(dataloader):
+            wave = wave.to(Config.DEVICE)
+            mel = mel.to(Config.DEVICE)
 
-        # Pad or trim mel to length 300 frames
-        current_len = mel.size(1)
-        if current_len < 300:
-            padding = torch.zeros(mel.size(0), 300 - current_len, 80)
-            mel = torch.cat([mel, padding], dim=1)
-        elif current_len > 300:
-            mel = mel[:, :300, :]  # truncate
+            losses = train_transfer_step(
+                content_encoder,
+                speaker_encoder,
+                style_encoder,
+                style_modulator,
+                vocoder,
+                optimizer,
+                wave,
+                mel,
+                Config,
+            )
+            total_loss += losses["loss"]
+            if i % 10 == 0:
+                print(f"Epoch: {epoch}, Batch: {i}, Loss: {losses['loss']:.4f}")
+        print(f"Epoch {epoch} Average Loss: {total_loss / len(dataloader):.4f}")
 
-        # Normalize mel per sample
-        mel_mean = mel.mean(dim=(1, 2), keepdim=True)
-        mel_std = mel.std(dim=(1, 2), keepdim=True) + 1e-5
-        mel = (mel - mel_mean) / mel_std
+    # 5. Save Model
+    torch.save(
+        {
+            "content_encoder": content_encoder.state_dict(),
+            "speaker_encoder": speaker_encoder.state_dict(),
+            "style_encoder": style_encoder.state_dict(),
+            "style_modulator": style_modulator.state_dict(),
+            "vocoder": vocoder.state_dict(),
+        },
+        "speech_style_transfer_model.pth",
+    )
 
-        speaker_embed = speaker_encoder(mel)
-        style_embed = speaker_encoder(mel)
 
-        modulated = style_modulator(content_feat, style_embed)
-        reconstructed = vocoder(modulated)
-
-        if reconstructed.dim() == 3:
-            reconstructed = reconstructed.squeeze(1)
-
-        loss = recon_loss_fn(reconstructed, wave)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-
-        if i % 10 == 0:
-            print(f"Epoch {epoch}, Step {i}, Batch Loss: {loss.item():.4f}")
-
-    avg_loss = running_loss / len(dataloader)
-    print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}\n")
-
-# --- SAVE CHECKPOINT ---
-print("Saving model checkpoint...")
-torch.save({
-    'content_encoder': content_encoder.state_dict(),
-    'speaker_encoder': speaker_encoder.state_dict(),
-    'style_modulator': style_modulator.state_dict(),
-    'vocoder': vocoder.state_dict()
-}, 'speech_style_model.pth')
-print("Model saved as speech_style_model.pth")
+if __name__ == "__main__":
+    main()
 
